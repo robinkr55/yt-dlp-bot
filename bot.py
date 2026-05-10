@@ -14,18 +14,16 @@ os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 user_url_store = {}
 
 QUALITY_OPTIONS = {
-    "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]",   # 4K
-    "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]",   # 2K
-    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",   # Full HD
-    "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]",     # HD
-    "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]",     # SD
-    "360p":  "bestvideo[height<=360]+bestaudio/best[height<=360]",     # Low
-    "audio": "bestaudio/best",                                          # Sirf Audio MP3
+    "best":  "bestvideo+bestaudio/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "480p":  "best[height<=480]/best",
+    "360p":  "best[height<=360]/best",
+    "audio": "bestaudio/best",
 }
 
 QUALITY_LABELS = {
-    "2160p": "4K Ultra HD 🔵",
-    "1440p": "2K QHD 🟣",
+    "best":  "⭐ Best Quality (Auto)",
     "1080p": "1080p Full HD 🟢",
     "720p":  "720p HD 🟡",
     "480p":  "480p SD 🟠",
@@ -75,30 +73,6 @@ def quality_keyboard():
     return markup
 
 
-@bot.message_handler(func=lambda message: True)
-def handle_url(message):
-    url = message.text.strip()
-
-    if not url.startswith("http"):
-        bot.reply_to(message, "⚠️ Valid URL bhejo (http se shuru hona chahiye).\n\nExample: https://youtube.com/watch?v=...")
-        return
-
-    # URL store karo
-    user_url_store[message.chat.id] = url
-
-    # Platform detect karne ki koshish
-    platform = detect_platform(url)
-
-    bot.reply_to(
-        message,
-        f"🔗 *Link mila!*\n"
-        f"🌐 Platform: *{platform}*\n\n"
-        f"📊 *Kaun si quality mein download karein?*",
-        reply_markup=quality_keyboard(),
-        parse_mode="Markdown"
-    )
-
-
 def detect_platform(url):
     url_lower = url.lower()
     if "youtube.com" in url_lower or "youtu.be" in url_lower:
@@ -118,7 +92,32 @@ def detect_platform(url):
     elif "dailymotion.com" in url_lower:
         return "Dailymotion 📹"
     else:
-        return "Unknown Platform 🌐"
+        return "Other Platform 🌐"
+
+
+@bot.message_handler(func=lambda message: True)
+def handle_url(message):
+    url = message.text.strip()
+
+    if not url.startswith("http"):
+        bot.reply_to(
+            message,
+            "⚠️ Valid URL bhejo (http se shuru hona chahiye).\n\n"
+            "Example: https://youtube.com/watch?v=..."
+        )
+        return
+
+    user_url_store[message.chat.id] = url
+    platform = detect_platform(url)
+
+    bot.reply_to(
+        message,
+        f"🔗 *Link mila!*\n"
+        f"🌐 Platform: *{platform}*\n\n"
+        f"📊 *Kaun si quality mein download karein?*",
+        reply_markup=quality_keyboard(),
+        parse_mode="Markdown"
+    )
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("quality_"))
@@ -134,23 +133,27 @@ def handle_quality(call):
     bot.answer_callback_query(call.id, f"✅ {QUALITY_LABELS[quality_key]} select kiya!")
     bot.edit_message_text(
         f"⏳ *Download ho raha hai...*\n"
-        f"📊 Quality: *{QUALITY_LABELS[quality_key]}*\n"
-        f"🔗 URL: `{url[:50]}...`\n\n"
-        f"Please wait karo... 🙏",
+        f"📊 Quality: *{QUALITY_LABELS[quality_key]}*\n\n"
+        f"Thoda time lag sakta hai... 🙏",
         chat_id=chat_id,
         message_id=call.message.message_id,
         parse_mode="Markdown"
     )
 
-    format_str = QUALITY_OPTIONS[quality_key]
     is_audio = quality_key == "audio"
 
     ydl_opts = {
         "outtmpl": f"{DOWNLOAD_FOLDER}/%(title).50s.%(ext)s",
-        "format": format_str,
+        "format": QUALITY_OPTIONS[quality_key],
         "quiet": True,
         "noplaylist": True,
+        "socket_timeout": 60,
+        "retries": 5,
+        "fragment_retries": 5,
         "merge_output_format": "mp4" if not is_audio else None,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
     }
 
     if is_audio:
@@ -167,6 +170,10 @@ def handle_quality(call):
 
             if is_audio:
                 filename = os.path.splitext(filename)[0] + ".mp3"
+
+        # File exist check
+        if not os.path.exists(filename):
+            filename = os.path.splitext(filename)[0] + ".mp4"
 
         title = info.get("title", "Video")[:50]
         duration = info.get("duration", 0)
@@ -200,7 +207,12 @@ def handle_quality(call):
             if is_audio:
                 bot.send_audio(chat_id, f, caption=caption, parse_mode="Markdown")
             else:
-                bot.send_video(chat_id, f, caption=caption, parse_mode="Markdown", supports_streaming=True)
+                bot.send_video(
+                    chat_id, f,
+                    caption=caption,
+                    parse_mode="Markdown",
+                    supports_streaming=True
+                )
 
         os.remove(filename)
         user_url_store.pop(chat_id, None)
@@ -210,8 +222,8 @@ def handle_quality(call):
         bot.send_message(
             chat_id,
             f"❌ *Download fail hua!*\n\n"
-            f"Reason: `{error_msg}`\n\n"
-            f"💡 Try karo:\n"
+            f"`{error_msg}`\n\n"
+            f"💡 *Try karo:*\n"
             f"• Lower quality choose karo\n"
             f"• Check karo URL valid hai\n"
             f"• Private video nahi honi chahiye",
